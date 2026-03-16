@@ -1,0 +1,21 @@
+{
+  "name": "code-agent",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/**"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest",
+    "turbo": "^2.8.17"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build"
+  },
+  "packageManager": "bun@1.1.22"
+}
