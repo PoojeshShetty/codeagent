@@ -192,7 +192,7 @@
 }
 
 .sidebar {
-  width: 60px;
+  width: 120px;
   background: #f5f5f5;
   border-right: 1px solid #e5e5e5;
   display: flex;
@@ -235,6 +235,7 @@
   text-align: center;
   cursor: pointer;
   position: relative;
+  margin-top: 10px;
 }
 
 .session-item.active {

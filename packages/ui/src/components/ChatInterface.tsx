@@ -15,7 +15,7 @@ export default function ChatInterface() {
 
   const startSession = async () => {
     try {
-      const response = await fetch("http://localhost:4096/start_session", {
+      const response = await fetch("http://localhost:4096/session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -68,7 +68,7 @@ export default function ChatInterface() {
   }
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || !isSessionActive) return
+    if (!inputValue.trim() || !isSessionActive || !sessionId) return
 
     const userMessage = {
       sender: "user",
@@ -82,13 +82,12 @@ export default function ChatInterface() {
 
     try {
       // Send message to backend
-      const response = await fetch("http://localhost:4096/chat", {
+      const response = await fetch(`http://localhost:4096/session/${sessionId}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          sessionId,
           message: inputValue
         })
       })
@@ -97,7 +96,7 @@ export default function ChatInterface() {
         const data = await response.json()
         const botMessage = {
           sender: "bot",
-          text: data.response,
+          text: data.content,
           timestamp: new Date().toISOString()
         }
         setMessages(prev => [...prev, botMessage])
@@ -119,6 +118,30 @@ export default function ChatInterface() {
       handleSendMessage()
     }
   }
+
+  // Poll for message updates
+  useEffect(() => {
+    if (!sessionId || !isSessionActive) return
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:4096/session/${sessionId}`)
+        if (response.ok) {
+          const messages = await response.json()
+          // Simple approach: replace all messages with server state
+          setMessages(messages.map((m: any) => ({
+            sender: m.role,
+            text: m.content,
+            timestamp: new Date(m.created_at).toISOString()
+          })))
+        }
+      } catch (error) {
+        console.error("Failed to poll messages:", error)
+      }
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [sessionId, isSessionActive])
 
   return (
     <div className="chat-interface">
