@@ -17,5 +17,9 @@
     "dev": "turbo run dev",
     "build": "turbo run build"
   },
-  "packageManager": "bun@1.1.22"
+  "packageManager": "bun@1.1.22",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.69",
+    "@ai-sdk/mistral": "^3.0.30"
+  }
 }
