@@ -1,5 +1,6 @@
-import { processUserMessage } from './llm'
+import { generateResponse } from './llm'
 import { createSession, getSessionMessages } from './db'
+import { tools } from './tools'
 import { v4 as uuidv4 } from 'uuid'
 
 const server = Bun.serve({
@@ -49,8 +50,26 @@ const server = Bun.serve({
           console.log("Invalid body format:", body)
           return new Response("Invalid request body format", { status: 400, headers: corsHeaders })
         }
-        const result = await processUserMessage(sessionId, body.message)
-        return Response.json(result, { headers: corsHeaders })
+        
+        console.log("generating response through mistral")
+        try {
+          const result = await generateResponse({
+            providerID: 'mistral',
+            modelID: 'devstral-2512',
+            apiKey: '0wn4jD3G75yfANRGSK7lg5nv6P4BkHzu',
+            messages: [{ role: 'user' as const, content: body.message }],
+            tools
+          })
+          return Response.json(result, { headers: corsHeaders })
+        } catch (error) {
+          console.error("LLM error:", error)
+          // Fallback response if LLM fails
+          const fallbackResponse = {
+            text: `I'm currently unable to process your request: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            usage: { inputTokens: 0, outputTokens: 0 }
+          }
+          return Response.json(fallbackResponse, { headers: corsHeaders })
+        }
       } catch (error) {
         console.error("Error processing message:", error)
         return new Response("Error processing message", { status: 500, headers: corsHeaders })
@@ -73,6 +92,5 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type"
 }
-
 
 console.log(`Server running at http://localhost:${server.port}`)

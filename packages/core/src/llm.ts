@@ -1,112 +1,191 @@
-import { getToolByName, bashTool, readTool } from './tools'
-import { saveMessage, getSessionMessages } from './db'
-import { v4 as uuidv4 } from 'uuid'
+import { generateText, streamText } from "ai"
+import { createAnthropic } from "@ai-sdk/anthropic"
+import { createOpenAI } from "@ai-sdk/openai"
+import { createMistral } from "@ai-sdk/mistral"
+import { z, ZodSchema } from "zod"
 
-// Simple LLM simulation for basic functionality
-async function simulateLLMResponse(messages: any[]) {
-  const lastMessage = messages[messages.length - 1]
-  
-  // Simple logic to determine response
-  if (lastMessage.content.toLowerCase().includes('read file')) {
-    // Extract filename if possible
-    const filenameMatch = lastMessage.content.match(/read file "?([^"]+)"?/i)
-    if (filenameMatch) {
-      const filename = filenameMatch[1]
-      return `I need to read the file ${filename} to answer your question. Let me do that now.`
-    }
-  } else if (lastMessage.content.toLowerCase().includes('list files')) {
-    return "I can list files in the current directory. Would you like me to do that?"
-  }
-  
-  return "I understand your request. Let me process it and see what tools I need to use."
+interface ToolDefinition {
+  description: string
+  parameters: ZodSchema<any>
+  execute: (args: any) => Promise<string>
 }
 
-export async function processUserMessage(sessionId: string, userMessage: string) {
-  // Save user message to database
-  const userMessageId = uuidv4()
-  saveMessage(sessionId, userMessageId, 'user', userMessage)
-  
-  // Get conversation history
-  const messages = getSessionMessages(sessionId)
-  
-  // Convert to LLM message format
-  const llmMessages = messages.map(msg => ({
-    role: msg.role as 'user' | 'assistant' | 'system',
-    content: msg.content
-  }))
-  
-  // Add system message if this is the first message
-  if (messages.length === 1) {
-    llmMessages.unshift({
-      role: 'system' as const,
-      content: 'You are a helpful coding assistant. You can use tools to read files and execute commands.'
-    })
+interface CommonInput {
+  providerID: string
+  modelID: string
+  apiKey: string
+  baseURL?: string
+  systemPrompt?: string
+  messages: { role: "user" | "assistant"; content: string }[]
+  tools?: Record<string, ToolDefinition>
+  onStepFinish?: (step: { toolCalls: any[], toolResults: any[], text: string }) => void
+}
+
+interface StreamInput extends CommonInput {
+  onChunk: (chunk: string) => void
+  onFinish?: (fullText: string) => void
+}
+
+function getProviderModel(input: { providerID: string; modelID: string; apiKey: string; baseURL?: string }) {
+  const { providerID, modelID, apiKey, baseURL } = input
+
+  if (!apiKey) {
+    throw new Error(`Empty API key for provider ${providerID} and model ${modelID}`)
   }
-  
-  // Generate assistant message ID
-  const assistantMessageId = uuidv4()
-  
-  // Simulate LLM response
-  const simulatedResponse = await simulateLLMResponse(llmMessages)
-  saveMessage(sessionId, assistantMessageId, 'assistant', simulatedResponse)
-  
-  // Check if we need to use tools based on the response
-  if (simulatedResponse.includes('read the file')) {
-    // Extract filename
-    const filenameMatch = simulatedResponse.match(/read the file ([^ .]+)/)
-    if (filenameMatch) {
-      const filename = filenameMatch[1]
+
+  switch (providerID.toLowerCase()) {
+    case "anthropic":
+      const anthropic = createAnthropic({ apiKey, baseURL })
+      return anthropic(modelID)
+    case "openai":
+      const openai = createOpenAI({ apiKey, baseURL })
+      return openai(modelID)
+    case "mistral":
+      const mistral = createMistral({ apiKey, baseURL })
+      return mistral(modelID)
+    default:
+      throw new Error(`Unsupported provider: ${providerID}`)
+  }
+}
+
+function convertToolsToAISDKFormat(tools: Record<string, ToolDefinition> | undefined) {
+  if (!tools) return undefined
+
+  const toolSet: Record<string, {
+    description: string
+    parameters: ZodSchema<any>
+    execute: (args: any) => Promise<string>
+  }> = {}
+
+  for (const [name, tool] of Object.entries(tools)) {
+    toolSet[name] = {
+      description: tool.description,
+      parameters: tool.parameters,
+      execute: tool.execute
+    }
+  }
+
+  return toolSet as any // Cast to any to handle the complex ToolSet type
+}
+
+export async function generateResponse(input: CommonInput): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }> {
+  const { providerID, modelID, apiKey, baseURL, systemPrompt, messages, tools } = input
+
+  try {
+    const model = getProviderModel({ providerID, modelID, apiKey, baseURL })
+    const aiTools = convertToolsToAISDKFormat(tools)
+
+    // Manual multi-step implementation since maxSteps is not available in current SDK
+    let fullText = ""
+    let totalUsage = { inputTokens: 0, outputTokens: 0 }
+    let stepCount = 0
+    const maxSteps = 10
+    
+    while (stepCount < maxSteps) {
+      stepCount++
       
-      try {
-        // Try different possible paths
-        const pathsToTry = [
-          filename,
-          `packages/core/${filename}`,
-          `packages/ui/${filename}`,
-          `packages/desktop/${filename}`
-        ]
-        
-        let fileContent = ''
-        let foundPath = ''
-        
-        for (const path of pathsToTry) {
-          try {
-            // Check if file exists
-            await Bun.file(path).text()
-            foundPath = path
-            break
-          } catch {
-            // File doesn't exist, try next path
-          }
-        }
-        
-        if (foundPath) {
-          // Use read tool
-          const toolId = uuidv4()
-          fileContent = await readTool.execute({ path: foundPath }, {
-            sessionId,
-            toolId,
-            signal: new AbortController().signal
-          })
-        } else {
-          fileContent = `File ${filename} not found in any of the expected locations.`
-        }
-        
-        // Update assistant message with file content
-        const updatedResponse = simulatedResponse + '\n\nFile content:\n```\n' + fileContent + '\n```'
-        saveMessage(sessionId, assistantMessageId, 'assistant', updatedResponse)
-        
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        const updatedResponse = simulatedResponse + '\n\nError reading file: ' + errorMessage
-        saveMessage(sessionId, assistantMessageId, 'assistant', updatedResponse)
+      const { text, usage, toolCalls, toolResults } = await generateText({
+        model,
+        system: systemPrompt,
+        messages,
+        tools: aiTools
+      })
+      
+      if (text) {
+        fullText += text
+      }
+      
+      if (usage) {
+        totalUsage.inputTokens += usage.inputTokens || 0
+        totalUsage.outputTokens += usage.outputTokens || 0
+      }
+      
+      if (input.onStepFinish && (toolCalls || toolResults || text)) {
+        input.onStepFinish({ toolCalls: toolCalls || [], toolResults: toolResults || [], text: text || "" })
+      }
+      
+      // If there are no tool calls, we're done
+      if (!toolCalls || toolCalls.length === 0) {
+        break
+      }
+      
+      // If we have tool results, add them to messages for next iteration
+      if (toolResults && toolResults.length > 0) {
+        messages.push(...toolResults.map(result => ({
+          role: "assistant" as const,
+          content: `Tool result: ${JSON.stringify(result)}`
+        })))
       }
     }
-  }
-  
-  return {
-    sessionId,
-    messageId: assistantMessageId,
-    content: getSessionMessages(sessionId).find(m => m.id === assistantMessageId)?.content || ''
+    
+    const usage = totalUsage.inputTokens > 0 || totalUsage.outputTokens > 0 
+      ? totalUsage 
+      : undefined
+    
+    if (usage) {
+      console.log(`Token usage - Input: ${usage.inputTokens}, Output: ${usage.outputTokens}`)
+    }
+    
+    return {
+      text: fullText,
+      usage: usage
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error 
+      ? error.message 
+      : `Unknown error from ${providerID} ${modelID}`
+    throw new Error(`LLM call failed (${providerID} ${modelID}): ${errorMessage}`)
   }
 }
+
+export async function streamResponse(input: StreamInput): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }> {
+  const { providerID, modelID, apiKey, baseURL, systemPrompt, messages, tools, onChunk, onFinish } = input
+
+  try {
+    const model = getProviderModel({ providerID, modelID, apiKey, baseURL })
+    const aiTools = convertToolsToAISDKFormat(tools)
+
+    // For now, use simple streaming without multi-step
+    // The current AI SDK version doesn't support streaming with tool calls easily
+    let fullText = ""
+    
+    const result = await streamText({
+      model,
+      system: systemPrompt,
+      messages,
+      tools: aiTools,
+      onFinish: ({ text, usage }) => {
+        fullText = text
+        if (usage) {
+          console.log(`Token usage - Input: ${usage.inputTokens}, Output: ${usage.outputTokens}`)
+        }
+        if (onFinish) {
+          onFinish(text)
+        }
+      }
+    })
+    
+    // Stream chunks to the callback
+    for await (const chunk of result.textStream) {
+      fullText += chunk
+      onChunk(chunk)
+    }
+
+    // Stream chunks to the callback
+    for await (const chunk of result.textStream) {
+      fullText += chunk
+      onChunk(chunk)
+    }
+
+    return {
+      text: fullText,
+      usage: undefined // Usage will be logged in onFinish callback
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error 
+      ? error.message 
+      : `Unknown error from ${providerID} ${modelID}`
+    throw new Error(`LLM streaming failed (${providerID} ${modelID}): ${errorMessage}`)
+  }
+}
+

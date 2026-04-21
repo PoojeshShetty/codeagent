@@ -96,7 +96,7 @@ export default function ChatInterface() {
         const data = await response.json()
         const botMessage = {
           sender: "bot",
-          text: data.content,
+          text: data.text,
           timestamp: new Date().toISOString()
         }
         setMessages(prev => [...prev, botMessage])
@@ -121,9 +121,7 @@ export default function ChatInterface() {
 
   // Poll for message updates
   useEffect(() => {
-    if (!sessionId || !isSessionActive) return
-
-    const interval = setInterval(async () => {
+    async function getSessionMessages() {
       try {
         const response = await fetch(`http://localhost:4096/session/${sessionId}`)
         if (response.ok) {
@@ -138,9 +136,11 @@ export default function ChatInterface() {
       } catch (error) {
         console.error("Failed to poll messages:", error)
       }
-    }, 2000)
+    }
+    if (!sessionId || !isSessionActive) return
 
-    return () => clearInterval(interval)
+    getSessionMessages();
+    
   }, [sessionId, isSessionActive])
 
   return (
