@@ -1,0 +1,109 @@
+.home {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.home-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 480px;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+.home-title {
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--text-h);
+  letter-spacing: -1px;
+  margin: 0 0 4px;
+}
+
+.home-subtitle {
+  font-size: 14px;
+  color: var(--text);
+  margin: 0 0 24px;
+}
+
+.open-project-btn {
+  width: 100%;
+  padding: 12px 20px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.open-project-btn:hover {
+  opacity: 0.88;
+}
+
+.recent-projects {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.recent-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  margin: 0 0 8px;
+  text-align: left;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.recent-item:hover {
+  background: var(--accent-bg);
+}
+
+.recent-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.recent-path {
+  font-size: 11px;
+  color: var(--text);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
