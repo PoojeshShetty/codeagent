@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react"
+import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import ProjectRail from "./components/ProjectRail"
 import ChatInterface from "./components/ChatInterface"
 import { getRecentProjects, type RecentProject } from "./components/Home"
+import { useTauri } from "./context/TauriContext"
 
 const STORAGE_KEY = "recentProjects"
 
@@ -12,6 +14,7 @@ function saveProject(project: RecentProject, existing: RecentProject[]): RecentP
 }
 
 function App() {
+  const { isTauri } = useTauri()
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [activeProject, setActiveProject] = useState<RecentProject | null>(null)
 
@@ -33,13 +36,27 @@ function App() {
     setProjects((prev) => saveProject(project, prev))
   }
 
-  function handleAddProject() {
-    // Tauri file-dialog integration comes in Step 2.
-    // For now, mock a project so the full flow is testable end-to-end.
-    const mockPath = "C:/Users/demo/my-project"
-    const mockName = mockPath.split(/[\\/]/).pop() ?? mockPath
-    const project: RecentProject = { path: mockPath, name: mockName, openedAt: Date.now() }
-    handleProjectSelect(project)
+  async function handleAddProject() {
+    let folderPath: string | null = null
+
+    if (isTauri) {
+      // Native OS folder picker
+      const result = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Open Project Folder",
+      })
+      // result is string | string[] | null depending on `multiple`
+      folderPath = typeof result === "string" ? result : null
+    } else {
+      // Browser dev fallback — prompt so the flow is still testable
+      folderPath = window.prompt("Enter project path (browser fallback):", "/Users/me/my-project")
+    }
+
+    if (!folderPath) return
+
+    const name = folderPath.split(/[\\/]/).filter(Boolean).pop() ?? folderPath
+    handleProjectSelect({ path: folderPath, name, openedAt: Date.now() })
   }
 
   return (

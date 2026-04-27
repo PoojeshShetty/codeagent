@@ -4,7 +4,7 @@ node_modules
 out
 dist
 *.tgz
-*db
+*.db
 
 # code coverage
 coverage
@@ -35,3 +35,4 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 #TODO file
 TODO.md
+NOTES.md
