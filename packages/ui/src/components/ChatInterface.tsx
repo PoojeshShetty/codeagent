@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react"
 import type { RecentProject } from "./Home"
 import "./ChatInterface.css"
+import { apiHeaders } from "../utils/api"
 
 interface ChatInterfaceProps {
   activeProject: RecentProject | null
@@ -22,7 +23,7 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     try {
       const response = await fetch("http://localhost:4096/session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(activeProject),
       })
       if (response.ok) {
         const data = await response.json()
@@ -57,7 +58,7 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     try {
       const response = await fetch(`http://localhost:4096/session/${sessionId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(activeProject),
         body: JSON.stringify({ message: inputValue }),
       })
       if (response.ok) {

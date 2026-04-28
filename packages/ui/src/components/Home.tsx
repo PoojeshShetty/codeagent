@@ -1,11 +1,6 @@
 import { useState, useEffect } from "react"
 import "./Home.css"
-
-export interface RecentProject {
-  path: string
-  name: string
-  openedAt: number
-}
+import type { RecentProject } from "../types/Home"
 
 const STORAGE_KEY = "recentProjects"
 
