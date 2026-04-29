@@ -1,4 +1,4 @@
-import type { RecentProject } from "./Home"
+import type { RecentProject } from "../types/Home"
 import "./ProjectRail.css"
 
 interface ProjectRailProps {

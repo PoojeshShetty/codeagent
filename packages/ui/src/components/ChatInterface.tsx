@@ -1,100 +1,201 @@
 import { useState, useRef, useEffect } from "react"
-import type { RecentProject } from "./Home"
-import "./ChatInterface.css"
+import type { RecentProject } from "../types/Home"
 import { apiHeaders } from "../utils/api"
+import "./ChatInterface.css"
+
+interface Session {
+  id: string
+  directory: string | null
+  created_at: number
+  updated_at: number
+  status: string
+}
+
+interface Message {
+  sender: string
+  text: string
+  timestamp: string
+}
 
 interface ChatInterfaceProps {
   activeProject: RecentProject | null
 }
 
+const BASE = "http://localhost:4096"
+
+function formatSessionTitle(session: Session, index: number): string {
+  const date = new Date(session.created_at)
+  return `Session ${index + 1} · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<{ sender: string; text: string; timestamp: string }[]>([])
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState("")
-  const [isSessionActive, setIsSessionActive] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [sessions, setSessions] = useState<{ id: string; title: string; active: boolean }[]>([])
+  const [loadingSessions, setLoadingSessions] = useState(false)
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [sending, setSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  const startSession = async () => {
+  // ── Effect 1: load sessions whenever the active project changes ──────────────
+  useEffect(() => {
+    if (!activeProject) {
+      setSessions([])
+      setActiveSessionId(null)
+      setMessages([])
+      return
+    }
+
+    async function fetchSessions() {
+      setLoadingSessions(true)
+      try {
+        const res = await fetch(`${BASE}/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ directory: activeProject!.path }),
+        })
+        if (res.ok) {
+          const data: Session[] = await res.json()
+          setSessions(data)
+          // Don't auto-select — let the user pick or create a new one
+          setActiveSessionId(null)
+          setMessages([])
+        }
+      } catch (e) {
+        console.error("Failed to fetch sessions:", e)
+      } finally {
+        setLoadingSessions(false)
+      }
+    }
+
+    fetchSessions()
+  }, [activeProject?.path])
+
+  // ── Effect 2: load messages whenever the active session changes ───────────────
+  useEffect(() => {
+    if (!activeSessionId) {
+      setMessages([])
+      return
+    }
+
+    async function fetchMessages() {
+      setLoadingMessages(true)
+      try {
+        const res = await fetch(`${BASE}/session/${activeSessionId}`)
+        if (res.ok) {
+          const data = await res.json()
+          setMessages(
+            data.map((m: any) => ({
+              sender: m.role,
+              text: m.content,
+              timestamp: new Date(m.created_at).toISOString(),
+            }))
+          )
+        }
+      } catch (e) {
+        console.error("Failed to fetch messages:", e)
+      } finally {
+        setLoadingMessages(false)
+      }
+    }
+
+    fetchMessages()
+  }, [activeSessionId])
+
+  // ─── Actions ─────────────────────────────────────────────────────────────────
+
+  async function startSession() {
+    if (!activeProject) return
     try {
-      const response = await fetch("http://localhost:4096/session", {
+      const res = await fetch(`${BASE}/session`, {
         method: "POST",
         headers: apiHeaders(activeProject),
       })
-      if (response.ok) {
-        const data = await response.json()
-        const newSessionId = data.sessionId
-        setSessionId(newSessionId)
-        setIsSessionActive(true)
-        setSessions((prev) => [
-          ...prev.map((s) => ({ ...s, active: false })),
-          { id: newSessionId, title: `Session ${prev.length + 1}`, active: true },
-        ])
-        setMessages([
-          { sender: "system", text: "Session started. How can I help you today?", timestamp: new Date().toISOString() },
-        ])
+      if (res.ok) {
+        const data = await res.json()
+        const newSession: Session = {
+          id: data.sessionId,
+          directory: activeProject.path,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          status: "active",
+        }
+        // Prepend to list (newest first) and activate it
+        setSessions((prev) => [newSession, ...prev])
+        setActiveSessionId(newSession.id)
+        setMessages([])
       }
-    } catch {
-      setMessages([{ sender: "system", text: "Failed to start session. Please try again.", timestamp: new Date().toISOString() }])
+    } catch (e) {
+      console.error("Failed to create session:", e)
     }
   }
 
-  const endSession = () => {
-    setIsSessionActive(false)
-    setSessionId(null)
-    setSessions((prev) => prev.map((s) => ({ ...s, active: false })))
-    setMessages([{ sender: "system", text: "Session ended.", timestamp: new Date().toISOString() }])
-  }
+  async function handleSendMessage() {
+    if (!inputValue.trim() || !activeSessionId || !activeProject) return
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || !isSessionActive || !sessionId) return
-    const userMessage = { sender: "user", text: inputValue, timestamp: new Date().toISOString() }
-    setMessages((prev) => [...prev, userMessage])
+    const optimisticMsg: Message = {
+      sender: "user",
+      text: inputValue,
+      timestamp: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, optimisticMsg])
+    const sent = inputValue
     setInputValue("")
+    setSending(true)
+
     try {
-      const response = await fetch(`http://localhost:4096/session/${sessionId}`, {
+      const res = await fetch(`${BASE}/session/${activeSessionId}`, {
         method: "POST",
         headers: apiHeaders(activeProject),
-        body: JSON.stringify({ message: inputValue }),
+        body: JSON.stringify({ message: sent }),
       })
-      if (response.ok) {
-        const data = await response.json()
-        setMessages((prev) => [...prev, { sender: "bot", text: data.text, timestamp: new Date().toISOString() }])
+      if (res.ok) {
+        const data = await res.json()
+        setMessages((prev) => [
+          ...prev,
+          { sender: "assistant", text: data.text, timestamp: new Date().toISOString() },
+        ])
+        // Bump updated_at in local state so the sidebar reflects recent activity
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId ? { ...s, updated_at: Date.now() } : s
+          )
+        )
       }
     } catch {
-      setMessages((prev) => [...prev, { sender: "system", text: "Failed to send message.", timestamp: new Date().toISOString() }])
+      setMessages((prev) => [
+        ...prev,
+        { sender: "system", text: "Failed to send message.", timestamp: new Date().toISOString() },
+      ])
+    } finally {
+      setSending(false)
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
     }
   }
 
-  useEffect(() => {
-    async function poll() {
-      try {
-        const res = await fetch(`http://localhost:4096/session/${sessionId}`)
-        if (res.ok) {
-          const data = await res.json()
-          setMessages(data.map((m: any) => ({ sender: m.role, text: m.content, timestamp: new Date(m.created_at).toISOString() })))
-        }
-      } catch (err) {
-        console.log("Err in poll ", ErrorEvent)
-      }
-    }
-    if (!sessionId || !isSessionActive) return
-    poll()
-  }, [sessionId, isSessionActive])
+  // ─── Derived state ───────────────────────────────────────────────────────────
+
+  const isSessionActive = !!activeSessionId
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="chat-layout">
+
       {/* ── Session Sidebar ── */}
       <div className="session-sidebar">
         <div className="sidebar-header">
@@ -104,11 +205,15 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
               <span className="sidebar-project-path">{activeProject.path}</span>
             </>
           ) : (
-            <span className="sidebar-project-name">No project</span>
+            <span className="sidebar-project-name">No project open</span>
           )}
         </div>
 
-        <button onClick={startSession} className="new-session-btn">
+        <button
+          onClick={startSession}
+          disabled={!activeProject}
+          className="new-session-btn"
+        >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
@@ -116,38 +221,77 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
         </button>
 
         <div className="sessions-list">
-          {sessions.map((session) => (
-            <div key={session.id} className={`session-item ${session.active ? "active" : ""}`}>
-              <span className="session-title">{session.title}</span>
-              {session.active && (
-                <button onClick={endSession} className="end-session-btn" title="End session">
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
+          {loadingSessions && (
+            <p className="sessions-loading">Loading…</p>
+          )}
+
+          {!loadingSessions && sessions.length === 0 && activeProject && (
+            <p className="sessions-empty">No sessions yet</p>
+          )}
+
+          {sessions.map((session, index) => {
+            const isActive = session.id === activeSessionId
+            return (
+              <button
+                key={session.id}
+                className={`session-item ${isActive ? "active" : ""}`}
+                onClick={() => setActiveSessionId(session.id)}
+              >
+                <span className="session-title">{formatSessionTitle(session, index)}</span>
+                <span className="session-date">
+                  {new Date(session.updated_at).toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* ── Main Area ── */}
       <div className="main-area">
         <div className="messages-container">
-          {messages.length === 0 ? (
+          {!activeProject && (
             <div className="empty-state">
-              {activeProject ? (
-                <p>{isSessionActive ? "Session active — enter a prompt below" : "Click \"New session\" to start"}</p>
-              ) : (
-                <p>Open a project to get started</p>
-              )}
+              <p>Open a project from the sidebar to get started</p>
             </div>
-          ) : (
+          )}
+
+          {activeProject && !isSessionActive && !loadingMessages && (
+            <div className="empty-state">
+              <p>Select a session or click "New session" to begin</p>
+            </div>
+          )}
+
+          {loadingMessages && (
+            <div className="empty-state">
+              <p>Loading messages…</p>
+            </div>
+          )}
+
+          {isSessionActive && !loadingMessages && messages.length === 0 && (
+            <div className="empty-state">
+              <p>Session ready — enter a prompt below</p>
+            </div>
+          )}
+
+          {messages.length > 0 && (
             <div className="messages-list">
               {messages.map((msg, i) => (
                 <div key={i} className={`message message-${msg.sender}`}>
                   <div className="message-text">{msg.text}</div>
-                  <div className="message-time">{new Date(msg.timestamp).toLocaleTimeString()}</div>
+                  <div className="message-time">
+                    {new Date(msg.timestamp).toLocaleTimeString()}
+                  </div>
                 </div>
               ))}
+              {sending && (
+                <div className="message message-system">
+                  <div className="message-text typing">Thinking…</div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -161,21 +305,26 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
             placeholder={
               !activeProject
                 ? "Open a project first…"
-                : isSessionActive
-                ? 'Ask anything… "Find and fix security vulnerabilities"'
-                : "Start a session to begin…"
+                : !isSessionActive
+                ? "Start or select a session to begin…"
+                : 'Ask anything… e.g. "List all files in src/"'
             }
-            disabled={!isSessionActive}
+            disabled={!isSessionActive || sending}
             className="message-input"
             rows={3}
           />
           <div className="input-footer">
-            <button onClick={handleSendMessage} disabled={!inputValue.trim() || !isSessionActive} className="send-btn">
-              Send
+            <button
+              onClick={handleSendMessage}
+              disabled={!inputValue.trim() || !isSessionActive || sending}
+              className="send-btn"
+            >
+              {sending ? "Sending…" : "Send"}
             </button>
           </div>
         </div>
       </div>
+
     </div>
   )
 }
