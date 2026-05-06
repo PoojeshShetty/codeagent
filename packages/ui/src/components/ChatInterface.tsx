@@ -17,11 +17,43 @@ interface Message {
   timestamp: string
 }
 
+interface ModelEntry {
+  id: string
+  name: string
+  [key: string]: unknown
+}
+
+interface ProviderEntry {
+  id: string
+  name: string
+  api?: string
+  models: Record<string, ModelEntry>
+}
+
+interface SelectedModel {
+  modelId: string
+  providerId: string
+}
+
 interface ChatInterfaceProps {
   activeProject: RecentProject | null
 }
 
 const BASE = "http://localhost:4096"
+const MODEL_STORAGE_KEY = "model_selected"
+
+function loadSelectedModel(): SelectedModel | null {
+  try {
+    const raw = localStorage.getItem(MODEL_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function saveSelectedModel(model: SelectedModel) {
+  localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model))
+}
 
 function formatSessionTitle(session: Session, index: number): string {
   const date = new Date(session.created_at)
@@ -40,10 +72,44 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
   const [sending, setSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Model selector state
+  const [providers, setProviders] = useState<Record<string, ProviderEntry>>({})
+  const [selectedModel, setSelectedModel] = useState<SelectedModel | null>(loadSelectedModel)
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
+  const [modelSearch, setModelSearch] = useState("")
+  const modelSelectorRef = useRef<HTMLDivElement>(null)
+
   // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  // Fetch provider/model list once on mount
+  useEffect(() => {
+    async function fetchProviders() {
+      try {
+        const res = await fetch(`${BASE}/providers`)
+        if (res.ok) {
+          const data: Record<string, ModelEntry[]> = await res.json()
+          setProviders(data)
+        }
+      } catch (e) {
+        console.error("Failed to fetch providers:", e)
+      }
+    }
+    fetchProviders()
+  }, [])
+
+  // Close model selector on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (modelSelectorRef.current && !modelSelectorRef.current.contains(e.target as Node)) {
+        setModelSelectorOpen(false)
+      }
+    }
+    if (modelSelectorOpen) document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [modelSelectorOpen])
 
   // ── Effect 1: load sessions whenever the active project changes ──────────────
   useEffect(() => {
@@ -159,16 +225,15 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
       })
       if (res.ok) {
         const data = await res.json()
-        setMessages((prev) => [
-          ...prev,
-          { sender: "assistant", text: data.text, timestamp: new Date().toISOString() },
-        ])
-        // Bump updated_at in local state so the sidebar reflects recent activity
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === activeSessionId ? { ...s, updated_at: Date.now() } : s
-          )
-        )
+            setMessages((prev) => [
+              ...prev,
+              { sender: "assistant", text: data.text, timestamp: new Date().toISOString() },
+            ])
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === activeSessionId ? { ...s, updated_at: Date.now() } : s
+              )
+            )
       }
     } catch {
       setMessages((prev) => [
@@ -187,9 +252,31 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     }
   }
 
+  function handleSelectModel(providerId: string, modelId: string) {
+    const selection: SelectedModel = { modelId, providerId }
+    setSelectedModel(selection)
+    saveSelectedModel(selection)
+    setModelSelectorOpen(false)
+    setModelSearch("")
+  }
+
   // ─── Derived state ───────────────────────────────────────────────────────────
 
   const isSessionActive = !!activeSessionId
+
+  const filteredProviders = Object.values(providers).reduce<ProviderEntry[]>((acc, provider) => {
+    const q = modelSearch.toLowerCase()
+    const allModels = Object.values(provider.models)
+    const filtered = q
+      ? allModels.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+      : allModels
+    if (filtered.length) acc.push({ ...provider, models: Object.fromEntries(filtered.map(m => [m.id, m])) })
+    return acc
+  }, [])
+
+  const selectedModelName = selectedModel
+    ? providers[selectedModel.providerId]?.models[selectedModel.modelId]?.name ?? selectedModel.modelId
+    : null
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
@@ -314,6 +401,64 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
             rows={3}
           />
           <div className="input-footer">
+            {/* Model selector */}
+            <div className="model-selector-wrap" ref={modelSelectorRef}>
+              <button
+                className="model-selector-btn"
+                onClick={() => setModelSelectorOpen(o => !o)}
+                title="Select model"
+              >
+                <span className="model-selector-icon">⊞</span>
+                <span className="model-selector-label">
+                  {selectedModelName ?? "Select model"}
+                </span>
+                <span className="model-selector-chevron">▾</span>
+              </button>
+
+              {modelSelectorOpen && (
+                <div className="model-dropdown">
+                  <div className="model-search-wrap">
+                    <span className="model-search-icon">⌕</span>
+                    <input
+                      className="model-search-input"
+                      placeholder="Search models"
+                      value={modelSearch}
+                      onChange={e => setModelSearch(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="model-list">
+                    {filteredProviders.map(provider => (
+                      <div key={provider.id} className="model-group">
+                        <div className="model-group-header">{provider.name}</div>
+                        {Object.values(provider.models).map(model => {
+                          const isFree = (model.input === 0 && model.output === 0) || model.free === true
+                          const isSelected =
+                            selectedModel?.providerId === provider.id &&
+                            selectedModel?.modelId === model.id
+                          return (
+                            <button
+                              key={model.id}
+                              className={`model-item ${isSelected ? "selected" : ""}`}
+                              onClick={() => handleSelectModel(provider.id, model.id)}
+                            >
+                              <span className="model-item-name">{model.name}</span>
+                              {isFree && <span className="model-free-badge">Free</span>}
+                              {isSelected && <span className="model-check">✓</span>}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    ))}
+                    {filteredProviders.length === 0 && (
+                      <p className="model-empty">No models found</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={handleSendMessage}
               disabled={!inputValue.trim() || !isSessionActive || sending}
