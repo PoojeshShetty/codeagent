@@ -6,6 +6,7 @@ interface ProjectRailProps {
   activeProject: RecentProject | null
   onProjectSelect: (project: RecentProject) => void
   onAddProject: () => void
+  onOpenSettings: () => void
 }
 
 /** Deterministic color from a string */
@@ -42,6 +43,7 @@ export default function ProjectRail({
   activeProject,
   onProjectSelect,
   onAddProject,
+  onOpenSettings,
 }: ProjectRailProps) {
   return (
     <div className="project-rail">
@@ -70,6 +72,27 @@ export default function ProjectRail({
       </div>
 
       <div className="rail-bottom">
+        <button
+          className="rail-settings-btn"
+          onClick={onOpenSettings}
+          title="Provider Settings"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+            />
+            <path
+              d="M13.3 6.7a1 1 0 0 0 .2-1.1l-.8-1.4a1 1 0 0 0-1-.5l-1 .2a5 5 0 0 0-.9-.5L9.6 2.4A1 1 0 0 0 8.7 2h-1.4a1 1 0 0 0-1 .7l-.3 1a5 5 0 0 0-.9.5l-1-.2a1 1 0 0 0-1 .5L2.3 5.9a1 1 0 0 0 .2 1.1l.8.7v1l-.8.7a1 1 0 0 0-.2 1.1l.8 1.4a1 1 0 0 0 1 .5l1-.2c.3.2.6.4.9.5l.3 1a1 1 0 0 0 1 .7h1.4a1 1 0 0 0 1-.7l.3-1c.3-.1.6-.3.9-.5l1 .2a1 1 0 0 0 1-.5l.8-1.4a1 1 0 0 0-.2-1.1l-.8-.7v-1l.8-.7Z"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
         <button
           className="rail-add-btn"
           onClick={onAddProject}

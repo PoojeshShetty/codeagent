@@ -1,4 +1,5 @@
 import { z, ZodTypeAny } from 'zod'
+import { spawn } from 'child_process'
 import { $ } from 'bun'
 import { resolve, isAbsolute, sep } from 'path'
 import { stat, readdir, writeFile, readFile, mkdir } from 'fs/promises'
@@ -36,6 +37,87 @@ function assertWithinDirectory(absolutePath: string, ctx?: ToolContext): void {
   }
 }
 
+const DANGEROUS_PATTERNS = [
+  /\bsudo\b/,
+  /\bsu\s/,
+  /\beval\b/,
+  /curl\b.*\|\s*(ba)?sh/,
+]
+
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue }
+    if ((ch === ' ' || ch === '\t') && !inSingle && !inDouble) {
+      if (current) { tokens.push(current); current = '' }
+    } else {
+      current += ch
+    }
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+function extractPathArgs(command: string): string[] {
+  return tokenizeCommand(command).filter(token =>
+    token.startsWith('/') ||
+    token.startsWith('./') ||
+    token.startsWith('../') ||
+    token.startsWith('~') ||
+    (token.includes('/') && !token.startsWith('-'))
+  )
+}
+
+function runCommand(command: string, cwd: string, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const isWin = process.platform === 'win32'
+    const child = spawn(isWin ? 'cmd' : 'sh', [isWin ? '/c' : '-c', command], {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+
+    signal?.addEventListener('abort', () => child.kill())
+
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve(stdout + stderr)
+      else reject(new Error(stderr || `Process exited with code ${code}`))
+    })
+  })
+}
+
+/** Runs command in the main process via Bun shell — blocks until exit. Use for debugging only. */
+async function runCommandInMain(command: string, cwd: string): Promise<string> {
+  const result = await $`${command}`.cwd(cwd).text()
+  return result
+}
+
+function validateCommandPaths(command: string, ctx?: ToolContext): void {
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(`Command blocked: contains dangerous pattern`)
+    }
+  }
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? ''
+  for (const arg of extractPathArgs(command)) {
+    const expanded = arg.startsWith('~') ? arg.replace(/^~/, home) : arg
+    const resolved = isAbsolute(expanded) ? expanded : resolve(ctx?.directory ?? process.cwd(), expanded)
+    assertWithinDirectory(resolved, ctx)
+  }
+}
+
 async function walkFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true })
   const results: string[] = []
@@ -60,12 +142,20 @@ const bashSchema = z.object({
 
 export const bashTool: ToolDefinition<typeof bashSchema> = {
   name: 'bash',
-  description: 'Execute shell commands on the local machine',
+  description: 'Execute shell commands scoped to the project directory. ' +
+    'Commands that reference paths outside the project or use dangerous patterns (sudo, eval, etc.) are blocked.',
   parameters: bashSchema,
   execute: async ({ command }, ctx) => {
     saveToolCall(ctx!.sessionId, ctx!.toolId, 'bash', command, null, 'executing')
     try {
-      const result = await $`${command}`.cwd(ctx?.directory ?? process.cwd()).text()
+      validateCommandPaths(command, ctx)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      updateToolOutput(ctx!.toolId, msg, 'failed')
+      return msg
+    }
+    try {
+      const result = await runCommandInMain(command, ctx?.directory ?? process.cwd())
       updateToolOutput(ctx!.toolId, result, 'completed')
       return result
     } catch (error) {
@@ -291,6 +381,7 @@ export const searchFileTool: ToolDefinition<typeof searchFileSchema> = {
 
 /** Tools passed to generateResponse / the LLM */
 export const tools = {
+  bash: bashTool,
   read_file: readFileTool,
   list_directory: listDirectoryTool,
   insert_file: insertFileTool,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import ProjectRail from "./components/ProjectRail"
 import ChatInterface from "./components/ChatInterface"
+import ProviderSettings from "./components/ProviderSettings"
 import { getRecentProjects } from "./components/Home"
 import type { RecentProject } from "./types/Home"
 import { useTauri } from "./context/TauriContext"
@@ -18,6 +19,7 @@ function App() {
   const { isTauri } = useTauri()
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [activeProject, setActiveProject] = useState<RecentProject | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     fetch("http://localhost:4096/hello_world")
@@ -67,8 +69,10 @@ function App() {
         activeProject={activeProject}
         onProjectSelect={handleProjectSelect}
         onAddProject={handleAddProject}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <ChatInterface activeProject={activeProject} />
+      {settingsOpen && <ProviderSettings onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }

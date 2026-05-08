@@ -1,4 +1,4 @@
-import { generateText, streamText } from "ai"
+import { generateText, streamText, stepCountIs } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createMistral } from "@ai-sdk/mistral"
@@ -75,61 +75,37 @@ export async function generateResponse(input: CommonInput): Promise<{ text: stri
     const model = getProviderModel({ providerID, modelID, apiKey, baseURL })
     const aiTools = convertToolsToAISDKFormat(tools)
 
-    // Manual multi-step implementation since maxSteps is not available in current SDK
-    let fullText = ""
-    let totalUsage = { inputTokens: 0, outputTokens: 0 }
-    let stepCount = 0
-    const maxSteps = 10
-    
-    while (stepCount < maxSteps) {
-      stepCount++
-      
-      const { text, usage, toolCalls, toolResults } = await generateText({
-        model,
-        system: systemPrompt,
-        messages,
-        tools: aiTools
-      })
-      
-      if (text) {
-        fullText += text
-      }
-      
-      if (usage) {
-        totalUsage.inputTokens += usage.inputTokens || 0
-        totalUsage.outputTokens += usage.outputTokens || 0
-      }
-      
-      if (input.onStepFinish && (toolCalls || toolResults || text)) {
-        input.onStepFinish({ toolCalls: toolCalls || [], toolResults: toolResults || [], text: text || "" })
-      }
-      
-      // If there are no tool calls, we're done
-      if (!toolCalls || toolCalls.length === 0) {
-        break
-      }
-      
-      // If we have tool results, add them to messages for next iteration
-      if (toolResults && toolResults.length > 0) {
-        messages.push(...toolResults.map(result => ({
-          role: "assistant" as const,
-          content: `Tool result: ${JSON.stringify(result)}`
-        })))
-      }
-    }
-    
-    const usage = totalUsage.inputTokens > 0 || totalUsage.outputTokens > 0 
-      ? totalUsage 
+    const toolOutputs: string[] = []
+
+    const { text, usage } = await generateText({
+      model,
+      system: systemPrompt,
+      messages,
+      tools: aiTools,
+
+      stopWhen: stepCountIs(10),
+      onStepFinish: ({ toolCalls, toolResults, text }) => {
+        if (toolCalls?.length) console.log(`[LLM] tool calls:`, toolCalls.map(t => `${t.toolName}(${JSON.stringify(t.input)})`))
+        if (toolResults?.length) {
+          console.log(`[LLM] tool results:`, toolResults.map(t => `${t.toolName} → ${String(t.output).slice(0, 100)}`))
+          toolResults.forEach(t => toolOutputs.push(String(t.output)))
+        }
+        if (text) console.log(`[LLM] step text:`, text.slice(0, 150))
+        input.onStepFinish?.({ toolCalls: toolCalls || [], toolResults: toolResults || [], text: text || "" })
+      },
+    })
+
+    const finalText = text || toolOutputs.join('\n\n')
+
+    const totalUsage = usage
+      ? { inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0 }
       : undefined
-    
-    if (usage) {
-      console.log(`Token usage - Input: ${usage.inputTokens}, Output: ${usage.outputTokens}`)
+
+    if (totalUsage) {
+      console.log(`Token usage - Input: ${totalUsage.inputTokens}, Output: ${totalUsage.outputTokens}`)
     }
-    
-    return {
-      text: fullText,
-      usage: usage
-    }
+
+    return { text: finalText, usage: totalUsage }
   } catch (error) {
     const errorMessage = error instanceof Error 
       ? error.message 
@@ -165,13 +141,6 @@ export async function streamResponse(input: StreamInput): Promise<{ text: string
       }
     })
     
-    // Stream chunks to the callback
-    for await (const chunk of result.textStream) {
-      fullText += chunk
-      onChunk(chunk)
-    }
-
-    // Stream chunks to the callback
     for await (const chunk of result.textStream) {
       fullText += chunk
       onChunk(chunk)

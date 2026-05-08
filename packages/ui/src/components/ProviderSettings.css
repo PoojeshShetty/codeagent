@@ -1,0 +1,235 @@
+.ps-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.ps-modal {
+  background: #1a1a1a;
+  border: 1px solid var(--border-mid, #333);
+  border-radius: 14px;
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+}
+
+.ps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+
+.ps-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-h, #fff);
+}
+
+.ps-close {
+  background: none;
+  border: none;
+  color: var(--text-dim, #666);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+
+.ps-close:hover {
+  color: var(--text-h, #fff);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.ps-body {
+  overflow-y: auto;
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ps-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ps-section-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #888);
+  letter-spacing: 0.02em;
+}
+
+.ps-card {
+  background: #242424;
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ps-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.ps-row-divider {
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+
+.ps-provider-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.ps-provider-icon {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-h, #fff);
+  width: 24px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.ps-provider-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ps-provider-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-h, #fff);
+}
+
+.ps-provider-desc {
+  font-size: 12px;
+  color: var(--text-dim, #666);
+}
+
+.ps-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border: 1px solid var(--border-mid, #333);
+  border-radius: 5px;
+  color: var(--text-muted, #888);
+  flex-shrink: 0;
+}
+
+.ps-disconnect {
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 5px;
+  transition: color 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+
+.ps-disconnect:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.ps-connect-btn {
+  background: #1e1e1e;
+  border: 1px solid var(--border-mid, #333);
+  color: var(--text-h, #fff);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.ps-connect-btn:hover {
+  background: #2a2a2a;
+  border-color: var(--text-dim, #555);
+}
+
+.ps-key-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #1e1e1e;
+  border-top: 1px solid var(--border, #2a2a2a);
+}
+
+.ps-key-input {
+  flex: 1;
+  background: #111;
+  border: 1px solid var(--border-mid, #333);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text-h, #fff);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.ps-key-input:focus {
+  border-color: var(--text-dim, #555);
+}
+
+.ps-key-input::placeholder {
+  color: var(--text-dim, #555);
+}
+
+.ps-error {
+  font-size: 12px;
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.ps-save-btn {
+  background: #fff;
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.12s;
+}
+
+.ps-save-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.ps-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ps-all-connected {
+  text-align: center;
+  color: var(--text-dim, #666);
+  font-size: 13px;
+  padding: 20px;
+  margin: 0;
+}
