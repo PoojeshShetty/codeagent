@@ -41,6 +41,18 @@ db.run(`
   )
 `)
 
+db.run(`
+  CREATE TABLE IF NOT EXISTS parts (
+    id          TEXT    PRIMARY KEY,
+    message_id  TEXT    NOT NULL,
+    session_id  TEXT    NOT NULL,
+    data        JSON    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+  )
+`)
+
 export const DB = db
 
 // ─── Session ──────────────────────────────────────────────────────────────────
@@ -128,4 +140,81 @@ export function getSessionTools(sessionId: string) {
       status: string
       created_at: number
     }>
+}
+
+// ─── Parts ────────────────────────────────────────────────────────────────────
+
+export type TextPart = {
+  type: 'text'
+  content: string
+}
+
+export type ToolCallPart = {
+  type: 'tool_call'
+  tool_id: string
+  tool_name: string
+  args: Record<string, unknown>
+  result?: string
+  summary?: string
+  model?: string
+  tokens?: { input: number; output: number }
+}
+
+export type PartData = TextPart | ToolCallPart
+
+export interface PartRow {
+  id: string
+  message_id: string
+  session_id: string
+  data: string
+  created_at: number
+}
+
+export function savePart(
+  partId: string,
+  messageId: string,
+  sessionId: string,
+  data: PartData
+): void {
+  db.run(
+    'INSERT INTO parts (id, message_id, session_id, data, created_at) VALUES (?, ?, ?, ?, ?)',
+    [partId, messageId, sessionId, JSON.stringify(data), Date.now()]
+  )
+}
+
+export function updatePartData(partId: string, data: Partial<PartData> & { type: PartData['type'] }): void {
+  const existing = db.prepare('SELECT data FROM parts WHERE id = ?').get(partId) as { data: string } | undefined
+  if (!existing) return
+  const merged = { ...JSON.parse(existing.data), ...data }
+  db.run('UPDATE parts SET data = ? WHERE id = ?', [JSON.stringify(merged), partId])
+}
+
+export function getMessageParts(messageId: string): PartRow[] {
+  return db
+    .prepare('SELECT * FROM parts WHERE message_id = ? ORDER BY created_at ASC')
+    .all(messageId) as PartRow[]
+}
+
+export function updateMessageContent(messageId: string, content: string): void {
+  db.run('UPDATE messages SET content = ? WHERE id = ?', [content, messageId])
+}
+
+export function getLastMessages(
+  sessionId: string,
+  excludeId: string
+): Array<{ role: string; content: string }> {
+  const rows = db
+    .prepare(
+      'SELECT id, role, content FROM messages WHERE session_id = ? AND id != ? ORDER BY created_at DESC'
+    )
+    .all(sessionId, excludeId) as Array<{ id: string; role: string; content: string }>
+
+  const lastUser = rows.find(r => r.role === 'user')
+  const lastAssistant = rows.find(r => r.role === 'assistant')
+
+  const result: Array<{ role: string; content: string }> = []
+  if (lastAssistant) result.push({ role: lastAssistant.role, content: lastAssistant.content })
+  if (lastUser) result.push({ role: lastUser.role, content: lastUser.content })
+
+  return result.reverse()
 }
