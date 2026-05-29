@@ -1,13 +1,13 @@
-import { generateResponse } from './llm'
-import { createSession, getSessionMessages, getSessionsByDirectory, saveMessage } from './db'
-import { tools, type ToolContext, type ToolDefinition } from './tools'
-import { v4 as uuidv4 } from 'uuid'
-import { ZodTypeAny } from 'zod'
 import { homedir } from 'os'
 import { join } from 'path'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
-
-// ─── Provider config helpers ──────────────────────────────────────────────────
+import {
+  listSessions,
+  createNewSession,
+  listMessages,
+  sendMessage,
+  streamMessage
+} from './services/session'
 
 const CONFIG_DIR = join(homedir(), '.local', 'share', 'codeagent')
 const PROVIDERS_FILE = join(CONFIG_DIR, 'providers.json')
@@ -28,8 +28,6 @@ function writeProvidersConfig(config: ProvidersConfig) {
   writeFileSync(PROVIDERS_FILE, JSON.stringify(config, null, 2), 'utf-8')
 }
 
-// ─── CORS ────────────────────────────────────────────────────────────────────
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
@@ -44,9 +42,6 @@ function err(message: string, status: number) {
   return json({ error: message }, status)
 }
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
-
-/** Reads the `directory` request header. Returns the path or a 400 Response. */
 function requireDirectory(req: Request): string | Response {
   const directory = req.headers.get("directory")
   if (!directory?.trim()) {
@@ -55,32 +50,14 @@ function requireDirectory(req: Request): string | Response {
   return directory.trim()
 }
 
-// ─── Tool binding ─────────────────────────────────────────────────────────────
-
-/**
- * Wraps each tool's execute in a closure that injects ToolContext
- * so llm.ts stays unaware of the directory concept.
- */
-function bindToolsToDirectory(
-  rawTools: Record<string, ToolDefinition<ZodTypeAny>>,
-  directory: string,
-  sessionId: string
-): Record<string, { description: string; parameters: any; execute: (args: any) => Promise<string> }> {
-  const bound: Record<string, any> = {}
-  for (const [name, tool] of Object.entries(rawTools)) {
-    bound[name] = {
-      description: tool.description,
-      parameters: tool.parameters,
-      execute: (args: any) => {
-        const ctx: ToolContext = { directory, sessionId, toolId: uuidv4() }
-        return tool.execute(args, ctx)
-      }
-    }
+function requireApiKey(providerId: string): { apiKey: string } | Response {
+  const savedConfig = readProvidersConfig()
+  const apiKey = savedConfig[providerId]?.apiKey
+  if (!apiKey) {
+    return err(`No API key configured for provider "${providerId}". Add it via Provider Settings.`, 400)
   }
-  return bound
+  return { apiKey }
 }
-
-// ─── Server ───────────────────────────────────────────────────────────────────
 
 const server = Bun.serve({
   port: 4096,
@@ -91,12 +68,10 @@ const server = Bun.serve({
       return new Response(null, { headers: corsHeaders })
     }
 
-    // Health check
     if (url.pathname === "/hello_world") {
       return json({ message: "Hello from code-agent core!" })
     }
 
-    // ── GET /providers — model list filtered to master provider list ──────────
     if (req.method === "GET" && url.pathname === "/providers") {
       try {
         const res = await fetch("https://models.dev/api.json")
@@ -115,8 +90,6 @@ const server = Bun.serve({
       }
     }
 
-    // ── POST /sessions — get all sessions for a project directory ─────────────
-    // Body: { directory: string }
     if (req.method === "POST" && url.pathname === "/sessions") {
       let body: { directory?: string }
       try {
@@ -126,26 +99,65 @@ const server = Bun.serve({
       }
 
       const directory = body.directory?.trim()
-      if (!directory) {
-        return err("Body must contain { directory: string }", 400)
-      }
+      if (!directory) return err("Body must contain { directory: string }", 400)
 
-      const sessions = getSessionsByDirectory(directory)
-      return json(sessions)
+      return json(listSessions(directory))
     }
 
-    // ── POST /session — create a new session ──────────────────────────────────
     if (req.method === "POST" && url.pathname === "/session") {
+      const directoryOrResponse = requireDirectory(req)
+      if (directoryOrResponse instanceof Response) return directoryOrResponse
+
+      const sessionId = createNewSession(directoryOrResponse)
+      return json({ sessionId })
+    }
+
+    if (req.method === "POST" && url.pathname.match(/^\/session\/[^/]+\/stream$/)) {
+      const sessionId = url.pathname.split("/")[2]
+
       const directoryOrResponse = requireDirectory(req)
       if (directoryOrResponse instanceof Response) return directoryOrResponse
       const directory = directoryOrResponse
 
-      const sessionId = uuidv4()
-      createSession(sessionId, directory)
-      return json({ sessionId })
+      let body: { message?: string; providerId?: string; modelId?: string }
+      try {
+        body = await req.json()
+      } catch {
+        return err("Invalid JSON body", 400)
+      }
+
+      if (!body || typeof body.message !== "string") {
+        return err("Request body must be { message: string }", 400)
+      }
+
+      const providerId = body.providerId?.trim()
+      const modelId = body.modelId?.trim()
+      if (!providerId || !modelId) {
+        return err("Request body must include providerId and modelId", 400)
+      }
+
+      const apiKeyOrResponse = requireApiKey(providerId)
+      if (apiKeyOrResponse instanceof Response) return apiKeyOrResponse
+
+      const stream = streamMessage({
+        sessionId,
+        directory,
+        message: body.message,
+        providerId,
+        modelId,
+        apiKey: apiKeyOrResponse.apiKey
+      })
+
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no"
+        }
+      })
     }
 
-    // ── POST /session/:id — send a message ────────────────────────────────────
     if (req.method === "POST" && url.pathname.startsWith("/session/")) {
       const sessionId = url.pathname.split("/")[2]
 
@@ -166,45 +178,24 @@ const server = Bun.serve({
 
       const providerId = body.providerId?.trim()
       const modelId = body.modelId?.trim()
-
       if (!providerId || !modelId) {
         return err("Request body must include providerId and modelId", 400)
       }
 
-      const savedConfig = readProvidersConfig()
-      const savedApiKey = savedConfig[providerId]?.apiKey
-      if (!savedApiKey) {
-        return err(`No API key configured for provider "${providerId}". Add it via Provider Settings.`, 400)
-      }
+      const apiKeyOrResponse = requireApiKey(providerId)
+      if (apiKeyOrResponse instanceof Response) return apiKeyOrResponse
 
       console.log(`[session:${sessionId}] dir="${directory}" provider="${providerId}" model="${modelId}" msg="${body.message.slice(0, 80)}"`)
 
       try {
-        saveMessage(sessionId, uuidv4(), "user", body.message)
-
-        const history = getSessionMessages(sessionId)
-        const messages = history.map(m => ({
-          role: m.role as "user" | "assistant",
-          content: m.content
-        }))
-
-        const boundTools = bindToolsToDirectory(tools, directory, sessionId)
-
-        const result = await generateResponse({
-          providerID: providerId,
-          modelID: modelId,
-          apiKey: savedApiKey,
-          systemPrompt:
-            `You are a helpful coding assistant. ` +
-            `The user's project is located at: ${directory}. ` +
-            `When working with files, always resolve paths relative to that directory. ` +
-            `When you use tools, summarize the results clearly in your final response.`,
-          messages,
-          tools: boundTools
+        const result = await sendMessage({
+          sessionId,
+          directory,
+          message: body.message,
+          providerId,
+          modelId,
+          apiKey: apiKeyOrResponse.apiKey
         })
-
-        if (result?.text) saveMessage(sessionId, uuidv4(), "assistant", result.text)
-
         return json(result)
       } catch (error) {
         console.error("LLM error:", error)
@@ -215,14 +206,11 @@ const server = Bun.serve({
       }
     }
 
-    // ── GET /session/:id — fetch message history ──────────────────────────────
     if (req.method === "GET" && url.pathname.startsWith("/session/")) {
       const sessionId = url.pathname.split("/")[2]
-      const messages = getSessionMessages(sessionId)
-      return json(messages)
+      return json(listMessages(sessionId))
     }
 
-    // ── POST /provider/register — save provider API key ───────────────────────
     if (req.method === "POST" && url.pathname === "/provider/register") {
       let body: { providerId?: string; apiKey?: string }
       try {
@@ -243,7 +231,6 @@ const server = Bun.serve({
       return json({ success: true, providerId: providerId.trim() })
     }
 
-    // ── GET /provider/register — list providers with saved API keys ───────────
     if (req.method === "GET" && url.pathname === "/provider/register") {
       const config = readProvidersConfig()
       return json({ providerIds: Object.keys(config) })

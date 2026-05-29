@@ -106,6 +106,7 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
     let steps = 0
 
     while (true) {
+      // avoid infinite loop safe check
       if (steps++ >= 10) break
 
       const stream = streamText({ model, system: systemPrompt, messages, tools: aiTools })
@@ -143,6 +144,7 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
             return
 
           default:
+            // check what all logs of event type we are getting
             console.log('[stream] unhandled part type:', part)
             break
         }

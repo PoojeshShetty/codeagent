@@ -153,3 +153,4 @@ When adding a new Tauri plugin:
 - **Core route order matters** — `POST /sessions` must be matched before `POST /session` in `index.ts` (substring matching). Same applies to any new `/session*` routes.
 - **No section separator comments** — do not use decorative dividers like `// ─── section name ───`. Function and variable names are sufficient to communicate structure.
 - **Types in separate files** — define types/interfaces in a co-located `types/` folder (e.g. `src/types/llm.ts` for `src/llm.ts`). Import them into the implementation file. Do not define types inline in the main file.
+- **Business logic in services** — keep `packages/core/src/index.ts` as a thin routing/validation layer. All business logic (DB calls, LLM orchestration, tool binding) goes into `packages/core/src/services/<domain>.ts` (e.g. `services/session.ts`). Routes parse and validate input, then delegate to service functions and shape the HTTP response.
