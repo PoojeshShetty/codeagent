@@ -2,29 +2,10 @@ import { generateText, streamText, stepCountIs } from "ai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createMistral } from "@ai-sdk/mistral"
-import { z, ZodSchema } from "zod"
+import { ZodSchema } from "zod"
+import type { ToolDefinition, CommonInput, StreamInput, StreamAgentInput, AgentEvent } from "./types/llm"
 
-interface ToolDefinition {
-  description: string
-  parameters: ZodSchema<any>
-  execute: (args: any) => Promise<string>
-}
-
-interface CommonInput {
-  providerID: string
-  modelID: string
-  apiKey: string
-  baseURL?: string
-  systemPrompt?: string
-  messages: { role: "user" | "assistant"; content: string }[]
-  tools?: Record<string, ToolDefinition>
-  onStepFinish?: (step: { toolCalls: any[], toolResults: any[], text: string }) => void
-}
-
-interface StreamInput extends CommonInput {
-  onChunk: (chunk: string) => void
-  onFinish?: (fullText: string) => void
-}
+export type { AgentEvent }
 
 function getProviderModel(input: { providerID: string; modelID: string; apiKey: string; baseURL?: string }) {
   const { providerID, modelID, apiKey, baseURL } = input
@@ -111,6 +92,88 @@ export async function generateResponse(input: CommonInput): Promise<{ text: stri
       ? error.message 
       : `Unknown error from ${providerID} ${modelID}`
     throw new Error(`LLM call failed (${providerID} ${modelID}): ${errorMessage}`)
+  }
+}
+
+export async function streamAgentResponse(input: StreamAgentInput): Promise<void> {
+  const { providerID, modelID, apiKey, baseURL, systemPrompt, messages: initialMessages, tools, onEvent } = input
+
+  try {
+    const model = getProviderModel({ providerID, modelID, apiKey, baseURL })
+    const aiTools = convertToolsToAISDKFormat(tools)
+    const messages = [...initialMessages]
+    let fullText = ''
+    let steps = 0
+
+    while (true) {
+      if (steps++ >= 10) break
+
+      const stream = streamText({ model, system: systemPrompt, messages, tools: aiTools })
+      const stepToolCalls: Array<{ type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }> = []
+      const stepToolResults: Array<{ toolCallId: string; toolName: string; output: unknown }> = []
+      let stepText = ''
+
+      for await (const part of stream.fullStream) {
+        switch (part.type) {
+          case 'text-delta':
+            stepText += part.text
+            fullText += part.text
+            onEvent({ type: 'text_delta', content: part.text })
+            break
+
+          case 'tool-call':
+            onEvent({ type: 'tool_call', tool: part.toolName, toolCallId: part.toolCallId, args: part.input })
+            stepToolCalls.push(part)
+            break
+
+          case 'tool-result':
+            onEvent({ type: 'tool_result', tool: part.toolName, toolCallId: part.toolCallId, result: String(part.output) })
+            stepToolResults.push(part)
+            break
+
+          case 'finish':
+            if (part.finishReason !== 'tool-calls') {
+              onEvent({ type: 'done', fullText })
+              return
+            }
+            break
+
+          case 'error':
+            onEvent({ type: 'error', message: String(part.error) })
+            return
+
+          default:
+            console.log('[stream] unhandled part type:', part)
+            break
+        }
+      }
+
+      if (stepToolCalls.length === 0) {
+        onEvent({ type: 'done', fullText })
+        return
+      }
+
+      messages.push({
+        role: 'assistant',
+        content: [
+          ...stepToolCalls.map(tc => ({ type: 'tool-call' as const, toolCallId: tc.toolCallId, toolName: tc.toolName, args: tc.input })),
+          ...(stepText ? [{ type: 'text' as const, text: stepText }] : [])
+        ]
+      })
+      messages.push({
+        role: 'tool',
+        content: stepToolResults.map(r => ({
+          type: 'tool-result' as const,
+          toolCallId: r.toolCallId,
+          toolName: r.toolName,
+          result: String(r.output)
+        }))
+      })
+    }
+
+    onEvent({ type: 'done', fullText })
+  } catch (error) {
+    onEvent({ type: 'error', message: error instanceof Error ? error.message : `Error from ${input.providerID}` })
   }
 }
 
