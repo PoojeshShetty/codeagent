@@ -1,9 +1,10 @@
 import { z, ZodType } from 'zod'
 import { resolve, isAbsolute, sep } from 'path'
-import { writeFile, readFile, mkdir } from 'fs/promises'
+import { writeFile, readFile, mkdir, readdir, stat } from 'fs/promises'
 import { existsSync } from 'fs'
 
-export interface ToolDefinition<T extends ZodType = ZodType> {
+// changing to any for now
+export interface ToolDefinition<T extends any> {
   name: string
   description: string
   parameters: T
@@ -35,24 +36,32 @@ export function assertWithinDirectory(absolutePath: string, ctx?: ToolContext): 
 
 const MAX_FILE_SIZE = 50 * 1024 // 50 KB
 
-const readFileSchema = z.object({
-  path: z.string().describe('Absolute or relative path to the file to read')
+const readSchema = z.object({
+  path: z.string().describe('Absolute or relative path to a file or directory')
 })
 
-export const readFileTool: ToolDefinition<typeof readFileSchema> = {
+export const readFileTool: ToolDefinition<typeof readSchema> = {
   name: 'read_file',
   description:
-    'Read the contents of a file at the given path. ' +
-    'Returns the full file content as text, truncated at 50KB.',
-  parameters: readFileSchema,
+    'Read a file or list a directory at the given path. ' +
+    'For files, returns the full content as text, truncated at 50KB. ' +
+    'For directories, returns a listing of entries with type (file/dir) and name.',
+  parameters: readSchema,
   execute: async ({ path: filePath }, ctx) => {
     const absolutePath = resolvePath(filePath, ctx)
     assertWithinDirectory(absolutePath, ctx)
-    const file = Bun.file(absolutePath)
-    let exists = false
-    try { exists = await file.exists() } catch { /* fall through */ }
-    if (!exists) return `File not found: ${absolutePath}`
 
+    let info
+    try { info = await stat(absolutePath) } catch { return `Path not found: ${absolutePath}` }
+
+    if (info.isDirectory()) {
+      const entries = await readdir(absolutePath, { withFileTypes: true })
+      if (entries.length === 0) return `Directory is empty: ${absolutePath}`
+      const lines = entries.map(e => `${e.isDirectory() ? 'dir ' : 'file'} ${e.name}`)
+      return `Contents of ${absolutePath}:\n${lines.join('\n')}`
+    }
+
+    const file = Bun.file(absolutePath)
     const content = await file.text()
     if (content.length > MAX_FILE_SIZE) {
       const sizeKB = Math.round(content.length / 1024)

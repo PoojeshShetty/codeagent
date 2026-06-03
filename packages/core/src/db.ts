@@ -205,16 +205,11 @@ export function getLastMessages(
 ): Array<{ role: string; content: string }> {
   const rows = db
     .prepare(
-      'SELECT id, role, content FROM messages WHERE session_id = ? AND id != ? ORDER BY created_at DESC'
+      "SELECT id, role, content FROM messages WHERE session_id = ? AND id != ? AND TRIM(content) != '' ORDER BY created_at DESC LIMIT 30"
     )
     .all(sessionId, excludeId) as Array<{ id: string; role: string; content: string }>
 
-  const lastUser = rows.find(r => r.role === 'user')
-  const lastAssistant = rows.find(r => r.role === 'assistant')
-
-  const result: Array<{ role: string; content: string }> = []
-  if (lastAssistant) result.push({ role: lastAssistant.role, content: lastAssistant.content })
-  if (lastUser) result.push({ role: lastUser.role, content: lastUser.content })
-
-  return result.reverse()
+  return rows
+    .reverse()
+    .map(r => ({ role: r.role, content: r.content }))
 }

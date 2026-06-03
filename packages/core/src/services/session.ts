@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { ZodType } from 'zod'
 import {
@@ -15,7 +17,7 @@ import { tools, type ToolContext, type ToolDefinition } from '../tools'
 import type { SendMessageInput, StreamMessageInput } from '../types/session'
 
 function bindToolsToDirectory(
-  rawTools: Record<string, ToolDefinition<ZodType>>,
+  rawTools: Record<string, ToolDefinition<any>>,
   directory: string,
   sessionId: string
 ): Record<string, { description: string; parameters: any; execute: (args: any) => Promise<string> }> {
@@ -33,11 +35,18 @@ function bindToolsToDirectory(
   return bound
 }
 
+let systemPromptTemplate: string | null = null
+
+function loadSystemPromptTemplate(): string {
+  if (systemPromptTemplate === null) {
+    const promptPath = join(import.meta.dir, '..', 'prompts', 'system-prompt.txt')
+    systemPromptTemplate = readFileSync(promptPath, 'utf-8').trim()
+  }
+  return systemPromptTemplate
+}
+
 function buildSystemPrompt(directory: string, includeSummaryHint = false): string {
-  const base =
-    `You are a helpful coding assistant. ` +
-    `The user's project is located at: ${directory}. ` +
-    `When working with files, always resolve paths relative to that directory.`
+  const base = loadSystemPromptTemplate()
   return includeSummaryHint
     ? base + ` When you use tools, summarize the results clearly in your final response.`
     : base
@@ -92,6 +101,7 @@ export function streamMessage(input: StreamMessageInput): ReadableStream {
   saveMessage(sessionId, assistantMsgId, 'assistant', '')
 
   const history = getLastMessages(sessionId, assistantMsgId)
+  console.log({history: JSON.stringify(history)})
   const boundTools = bindToolsToDirectory(tools, directory, sessionId)
 
   const encoder = new TextEncoder()
@@ -109,7 +119,7 @@ export function streamMessage(input: StreamMessageInput): ReadableStream {
           tools: boundTools,
           onEvent: (event) => {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
-
+            console.log("-==- event type value =-==-=-", event.type)
             switch (event.type) {
               case 'tool_call': {
                 const partId = uuidv4()
@@ -144,6 +154,10 @@ export function streamMessage(input: StreamMessageInput): ReadableStream {
                 })
                 updateMessageContent(assistantMsgId, event.fullText)
                 break
+
+              default:
+                // console.log({val: JSON.stringify(event)})
+                console.log("-=-=-=-=-== Event type =-=-=--=---=--=", event.type)
             }
           }
         })

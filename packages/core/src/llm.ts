@@ -104,23 +104,47 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
     const messages = [...initialMessages]
     let fullText = ''
     let steps = 0
+    const stepToolCalls: Array<{ type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }> = []
+    const stepToolResults: Array<{ toolCallId: string; toolName: string; output: unknown }> = []
+    let stepText = ''
+    let stepReasoning = ''
 
     while (true) {
+
       // avoid infinite loop safe check
       if (steps++ >= 10) break
 
       const stream = streamText({ model, system: systemPrompt, messages, tools: aiTools })
-      const stepToolCalls: Array<{ type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }> = []
-      const stepToolResults: Array<{ toolCallId: string; toolName: string; output: unknown }> = []
-      let stepText = ''
 
       for await (const part of stream.fullStream) {
         switch (part.type) {
+          case 'text-start':
+            console.log({textStart: JSON.stringify(part)})
+            break;
+
+
           case 'text-delta':
             stepText += part.text
             fullText += part.text
             onEvent({ type: 'text_delta', content: part.text })
             break
+          
+          case 'text-end':
+            console.log({textEnd: JSON.stringify(part), stepText, fullText})
+            break;
+
+          case 'reasoning-start':
+            console.log({reasoningStart: JSON.stringify(part)})
+            break;
+
+          case 'reasoning-delta':
+            stepReasoning += part.text
+            console.log({reasoningDelta: JSON.stringify(part)})
+            break;
+
+          case 'reasoning-end':
+            console.log({reasoningEnd: JSON.stringify(part), stepReasoning})
+            break;
 
           case 'tool-call':
             onEvent({ type: 'tool_call', tool: part.toolName, toolCallId: part.toolCallId, args: part.input })
@@ -134,6 +158,7 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
 
           case 'finish':
             if (part.finishReason !== 'tool-calls') {
+              // console.log({eventFinish:JSON.stringify(part)})
               onEvent({ type: 'done', fullText })
               return
             }
@@ -145,7 +170,7 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
 
           default:
             // check what all logs of event type we are getting
-            console.log('[stream] unhandled part type:', part)
+            console.log('[stream] unhandled part type:', part.type)
             break
         }
       }
@@ -158,7 +183,7 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
       messages.push({
         role: 'assistant',
         content: [
-          ...stepToolCalls.map(tc => ({ type: 'tool-call' as const, toolCallId: tc.toolCallId, toolName: tc.toolName, args: tc.input })),
+          ...stepToolCalls.map(tc => ({ type: 'tool-call' as const, toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input ?? {} })),
           ...(stepText ? [{ type: 'text' as const, text: stepText }] : [])
         ]
       })
@@ -168,11 +193,10 @@ export async function streamAgentResponse(input: StreamAgentInput): Promise<void
           type: 'tool-result' as const,
           toolCallId: r.toolCallId,
           toolName: r.toolName,
-          result: String(r.output)
+          output: { type: 'text' as const, value: String(r.output) }
         }))
       })
     }
-
     onEvent({ type: 'done', fullText })
   } catch (error) {
     onEvent({ type: 'error', message: error instanceof Error ? error.message : `Error from ${input.providerID}` })
