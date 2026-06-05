@@ -1,23 +1,10 @@
 import { useState, useRef, useEffect } from "react"
 import type { RecentProject } from "../types/Home"
+import type { Session, Message, StreamingMessage, AgentEvent } from "../types/chat"
 import { apiHeaders } from "../utils/api"
 import ModelSelector from "./ModelSelector"
 import { useModel } from "../context/ModelContext"
 import "./ChatInterface.css"
-
-interface Session {
-  id: string
-  directory: string | null
-  created_at: number
-  updated_at: number
-  status: string
-}
-
-interface Message {
-  sender: string
-  text: string
-  timestamp: string
-}
 
 interface ChatInterfaceProps {
   activeProject: RecentProject | null
@@ -30,25 +17,22 @@ function formatSessionTitle(session: Session, index: number): string {
   return `Session ${index + 1} · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
   const { selectedModel } = useModel()
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [streamingMessage, setStreamingMessage] = useState<StreamingMessage | null>(null)
   const [inputValue, setInputValue] = useState("")
   const [loadingSessions, setLoadingSessions] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  }, [messages, streamingMessage])
 
-  // ── Effect 1: load sessions whenever the active project changes ──────────────
   useEffect(() => {
     if (!activeProject) {
       setSessions([])
@@ -81,7 +65,6 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     fetchSessions()
   }, [activeProject?.path])
 
-  // ── Effect 2: load messages whenever the active session changes ───────────────
   useEffect(() => {
     if (!activeSessionId) {
       setMessages([])
@@ -111,8 +94,6 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
 
     fetchMessages()
   }, [activeSessionId])
-
-  // ─── Actions ─────────────────────────────────────────────────────────────────
 
   async function startSession() {
     if (!activeProject) return
@@ -151,9 +132,10 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     const sent = inputValue
     setInputValue("")
     setSending(true)
+    setStreamingMessage({ text: "", toolActivity: [] })
 
     try {
-      const res = await fetch(`${BASE}/session/${activeSessionId}`, {
+      const res = await fetch(`${BASE}/session/${activeSessionId}/stream`, {
         method: "POST",
         headers: apiHeaders(activeProject),
         body: JSON.stringify({
@@ -162,21 +144,107 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
           modelId: selectedModel?.modelId,
         }),
       })
-      if (res.ok) {
-        const data = await res.json()
-        setMessages((prev) => [
-          ...prev,
-          { sender: "assistant", text: data.text, timestamp: new Date().toISOString() },
-        ])
-        setSessions((prev) =>
-          prev.map((s) => (s.id === activeSessionId ? { ...s, updated_at: Date.now() } : s))
-        )
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Stream request failed: ${res.status}`)
       }
-    } catch {
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split("\n\n")
+        buffer = chunks.pop() ?? ""
+
+        for (const chunk of chunks) {
+          if (!chunk.startsWith("data: ")) continue
+          let event: AgentEvent
+          try {
+            event = JSON.parse(chunk.slice(6))
+          } catch {
+            continue
+          }
+
+          switch (event.type) {
+            case "text_delta":
+              setStreamingMessage((prev) =>
+                prev ? { ...prev, text: prev.text + event.content } : null
+              )
+              break
+
+            case "tool_call":
+              setStreamingMessage((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      toolActivity: [
+                        ...prev.toolActivity,
+                        { toolCallId: event.toolCallId, tool: event.tool, status: "calling" },
+                      ],
+                    }
+                  : null
+              )
+              break
+
+            case "tool_result":
+              setStreamingMessage((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      toolActivity: prev.toolActivity.map((t) =>
+                        t.toolCallId === event.toolCallId ? { ...t, status: "done" } : t
+                      ),
+                    }
+                  : null
+              )
+              break
+
+            case "done":
+              setMessages((prev) => [
+                ...prev,
+                {
+                  sender: "assistant",
+                  text: event.fullText,
+                  timestamp: new Date().toISOString(),
+                },
+              ])
+              setStreamingMessage(null)
+              setSessions((prev) =>
+                prev.map((s) =>
+                  s.id === activeSessionId ? { ...s, updated_at: Date.now() } : s
+                )
+              )
+              break
+
+            case "error":
+              setMessages((prev) => [
+                ...prev,
+                {
+                  sender: "system",
+                  text: `Error: ${event.message}`,
+                  timestamp: new Date().toISOString(),
+                },
+              ])
+              setStreamingMessage(null)
+              break
+          }
+        }
+      }
+    } catch (e) {
       setMessages((prev) => [
         ...prev,
-        { sender: "system", text: "Failed to send message.", timestamp: new Date().toISOString() },
+        {
+          sender: "system",
+          text: `Failed to send message: ${e instanceof Error ? e.message : "unknown error"}`,
+          timestamp: new Date().toISOString(),
+        },
       ])
+      setStreamingMessage(null)
     } finally {
       setSending(false)
     }
@@ -189,11 +257,7 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
     }
   }
 
-  // ─── Derived state ───────────────────────────────────────────────────────────
-
   const isSessionActive = !!activeSessionId
-
-  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="chat-layout">
@@ -277,7 +341,7 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
             </div>
           )}
 
-          {messages.length > 0 && (
+          {(messages.length > 0 || streamingMessage) && (
             <div className="messages-list">
               {messages.map((msg, i) => (
                 <div key={i} className={`message message-${msg.sender}`}>
@@ -287,9 +351,14 @@ export default function ChatInterface({ activeProject }: ChatInterfaceProps) {
                   </div>
                 </div>
               ))}
-              {sending && (
-                <div className="message message-system">
-                  <div className="message-text typing">Thinking…</div>
+              {streamingMessage && (
+                <div className="message message-assistant">
+                  {streamingMessage.toolActivity.map((t) => (
+                    <div key={t.toolCallId} className="tool-activity">
+                      {t.status === "calling" ? `⟳ ${t.tool}…` : `✓ ${t.tool}`}
+                    </div>
+                  ))}
+                  <div className="message-text">{streamingMessage.text || "…"}</div>
                 </div>
               )}
               <div ref={messagesEndRef} />

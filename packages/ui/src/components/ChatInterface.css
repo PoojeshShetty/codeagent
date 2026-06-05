@@ -227,6 +227,13 @@
   padding: 0 4px;
 }
 
+.tool-activity {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 4px;
+}
+
 .typing {
   opacity: 0.5;
   font-style: italic;
