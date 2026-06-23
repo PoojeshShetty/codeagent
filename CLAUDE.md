@@ -1,12 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-For coding standards follow @import skills/coding.md
-For output generation follow @import skills/compress.md
-
----
-
 ## Dev Commands
 
 Run everything together from the repo root:
@@ -160,3 +151,6 @@ When adding a new Tauri plugin:
 - **Shared types** → go in `src/types/`. Currently: `Home.ts` for `RecentProject`.
 - **Context** → `src/context/`. Use context for app-wide state (Tauri detection, model selection). Do not use context for page-level state.
 - **Core route order matters** — `POST /sessions` must be matched before `POST /session` in `index.ts` (substring matching). Same applies to any new `/session*` routes.
+- **No section separator comments** — do not use decorative dividers like `// ─── section name ───`. Function and variable names are sufficient to communicate structure.
+- **Types in separate files** — define types/interfaces in a co-located `types/` folder (e.g. `src/types/llm.ts` for `src/llm.ts`). Import them into the implementation file. Do not define types inline in the main file.
+- **Business logic in services** — keep `packages/core/src/index.ts` as a thin routing/validation layer. All business logic (DB calls, LLM orchestration, tool binding) goes into `packages/core/src/services/<domain>.ts` (e.g. `services/session.ts`). Routes parse and validate input, then delegate to service functions and shape the HTTP response.
